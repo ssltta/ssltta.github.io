@@ -1,0 +1,4 @@
+baseURL = 'https://ssltta.xyz/'
+languageCode = 'en-us'
+title = 'ssltta epic website'
+theme = 'console'

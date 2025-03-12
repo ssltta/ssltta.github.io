@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+<!-- 2025-03-07 Fri 01:46 -->
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Learn how to break Fortigate's firmware with me for great good!</title>
+<meta name="author" content="Emma" />
+<meta name="generator" content="Org Mode" />
+</head>
+<body>
+<div id="content" class="content">
+<h1 class="title">Learn how to break Fortigate's firmware with me for great good!</h1>
+<div id="table-of-contents" role="doc-toc">
+<h2>Table of Contents</h2>
+<div id="text-table-of-contents" role="doc-toc">
+<ul>
+<li><a href="#org113b512">1. Breaking Fortigate</a>
+<ul>
+<li><a href="#org73896a8">1.1. Introduction</a></li>
+<li><a href="#orge5d5072">1.2. How am I doing this?</a></li>
+<li><a href="#org2c71962">1.3. Getting the firmware image</a></li>
+<li><a href="#orga0eebd5">1.4. Reverse engineering the kernel image</a>
+<ul>
+<li><a href="#orgb2ddc69">1.4.1. Breakdown of the function</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+
+<div id="outline-container-org113b512" class="outline-2">
+<h2 id="org113b512"><span class="section-number-2">1.</span> Breaking Fortigate</h2>
+<div class="outline-text-2" id="text-1">
+</div>
+<div id="outline-container-org73896a8" class="outline-3">
+<h3 id="org73896a8"><span class="section-number-3">1.1.</span> Introduction</h3>
+<div class="outline-text-3" id="text-1-1">
+<p>
+I find reverse engineering super cool, I read a thousand ctf/bug bounty blogposts, I did one easy ctf, I think I am ready to find a bug in a security sensitive device!
+</p>
+
+<p>
+Cue in 2 months later&#x2026;
+</p>
+
+<p>
+Fortinet makes Internet facing devices, Internet facing devices are interesting for reverse engineers because if a hacker finds a 0day for that device, they'll have a foothold in your network in a manner no one can prevent.
+</p>
+</div>
+</div>
+
+<div id="outline-container-orge5d5072" class="outline-3">
+<h3 id="orge5d5072"><span class="section-number-3">1.2.</span> How am I doing this?</h3>
+<div class="outline-text-3" id="text-1-2">
+<p>
+The way I imagine this will go is I will get my hands on the firmware, and then I will be able to extract the binaries that are listening on the internet for traffic, in the hopes of analyzing it and finding a cool vulnerability.
+To recap: we get the firmware -&gt; we extract the binaries -&gt; we analyze the binaries -&gt; we find a 0day
+</p>
+</div>
+</div>
+
+<div id="outline-container-org2c71962" class="outline-3">
+<h3 id="org2c71962"><span class="section-number-3">1.3.</span> Getting the firmware image</h3>
+<div class="outline-text-3" id="text-1-3">
+<p>
+Go to the vendor's website or pirate it, it's not hard, I am currently analyzing fortigate 7.4.6 KVM
+</p>
+
+<p>
+Now you should have a file called fortios.qcow2, you'll probably notice that this image as-is is not useful, what is a qcow2 file anyway?
+</p>
+
+<p>
+From wikipedia: "qcow is a file format for disk image files used by QEMU, a hosted virtual machine monitor."
+</p>
+
+<p>
+Okay, so after following this <a href="https://gist.github.com/shamil/62935d9b456a6f9877b5">github gist</a>, we get <img src="../static/fortigate_file_content.png" alt="fortigate_file_content.png" />
+</p>
+
+<p>
+Yours probably won't look the same, because i added a bunch of files
+</p>
+
+<p>
+Cool, so after scouring every directory I notice that there's no trace of binaries here, is this the wrong image? Did I do something wrong?
+</p>
+
+<p>
+Does this even work? I boot up the image and check, and it does, so what's up with that? How does this start? What's the entryway for a Linux system to start? Maybe the grub config will tell me something <img src="../static/fortigate_grub.png" alt="fortigate_grub.png" />
+</p>
+
+<p>
+flatkc is the linux kernel image that gets loaded, rootfs.gz is the ramdisk, the virtual machine has an empty hdd slot so i assume this is where all of the binaries reside, let's gunzip it!
+</p>
+
+
+<div id="org57d607b" class="figure">
+<p><img src="../static/fortigate_gunzip.png" alt="fortigate_gunzip.png" />
+</p>
+</div>
+
+<p>
+Okay, not a gzip file, what is it then?
+</p>
+
+<p>
+```
+00000000: 9ca4 26aa cbd5 6c30 5b57 6108 0a2d 5b67  ..&amp;&#x2026;l0[Wa..-[g
+00000010: 3b0f d50a dc9d b0ef a0c6 3265 301b cb21  ;&#x2026;&#x2026;&#x2026;2e0..!
+00000020: 733c ddf4 3242 68b3 234e bfaa f231 b780  s&lt;..2Bh.#N&#x2026;1..
+00000030: d084 5f2c 35a1 1220 abf8 bb8a 6ab3 ff13  ..<sub>,5</sub>.. &#x2026;.j&#x2026;
+00000040: 57a9 b414 ff11 ca2a 1e14 0a53 d87a 073d  W&#x2026;&#x2026;*&#x2026;S.z.=
+00000050: abf2 2c8a e782 3b85 60bd 2e88 88a9 c140  ..,&#x2026;;.`&#x2026;&#x2026;@
+00000060: fca5 7b49 e3ee a971 1e50 0a02 b3e7 1fd8  ..{I&#x2026;q.P&#x2026;&#x2026;
+00000070: 2000 bae1 f2d0 eacb 6bdf 2bb2 c0ec 412a   &#x2026;&#x2026;.k.+&#x2026;A*
+00000080: 2412 0bca 1072 8ab2 7017 50b8 7591 702b  $&#x2026;.r..p.P.u.p+
+00000090: bf0c a3b5 df4e 5527 7c6d 8522 7a10 6153  &#x2026;..NU'|m."z.aS
+```
+</p>
+
+<p>
+it doesn't look like anything, this must mean that rootfs.gz is an encrypted file, flatkc must have some encryption functions that grab this rootfs.gz file and then decrypts it, we just need to slap flatkc in ghidra and look for it, right? Is this even possible for someone who hasn't touched a line of assembly since high school?
+</p>
+</div>
+</div>
+
+<div id="outline-container-orga0eebd5" class="outline-3">
+<h3 id="orga0eebd5"><span class="section-number-3">1.4.</span> Reverse engineering the kernel image</h3>
+<div class="outline-text-3" id="text-1-4">
+<p>
+I realize that to figure out how to decrypt the rootfs.gz file, I must first learn how the file is encrypted, so I try to load up the kernel image file for the router (here on after i'll simply call it 'flatkc', which is the name of the kernel image file)
+in Ghidra, but it doesn't work, Ghidra cannot load this type of file
+<img src="../static/fortigate_ghidra_supported_formats.png" alt="fortigate_ghidra_supported_formats.png" />
+</p>
+
+<p>
+``file`` says that ``flatkc`` is a ``linux kernel boot executable image``, which is not one of the file types listed, fortunately there's this great <a href="https://github.com/marin-m/vmlinux-to-elf">tool</a> that converts linux boot images into elf, built exactly for this purpose, we can now import it on Ghidra and start looking at it.
+</p>
+
+<p>
+I look for functions related with startup and initramfs unpacking, I find a function called ``populate<sub>rootfs</sub>`` which has the initrd address on it, which i quickly make a note of, and yes, the image came with symbols, but seemingly only the linux ones and some timer management stuff for some fortigate service we aren't concerned with.
+</p>
+
+
+<div id="org65b0d5a" class="figure">
+<p><img src="../static/fortigate_populate_root_fs.png" alt="fortigate_populate_root_fs.png" />
+</p>
+</div>
+
+<p>
+the address of ``_<sub>initramfs</sub><sub>start</sub>`` gets mentioned here by a bunch of functions, including an unlabeled one which i labelled myself, proc<sub>crypto</sub><sub>keys</sub> (the function does a lot more than this, but you'll see this later), out of all the functions mentioned, this one seems the most interesting! Let's look at it
+</p>
+</div>
+
+<div id="outline-container-orgb2ddc69" class="outline-4">
+<h4 id="orgb2ddc69"><span class="section-number-4">1.4.1.</span> Breakdown of the function</h4>
+<div class="outline-text-4" id="text-1-4-1">
+<p>
+The decompiled version of the proc<sub>crypto</sub><sub>keys</sub> function is very long, and despite the name that i gave it, it does not just process crypto keys (in retrospective, it is a pretty nonsensical name)
+</p>
+
+<p>
+I wrote a bunch explaining each and every single line of the decompiled code, but that wasn't very good reading so i'll just give you the high level overview of the code except for the interesting part
+</p>
+<ul class="org-ul">
+<li>It does a bunch of memory hygiene operations like zeroing buffers and initializing variables</li>
+<li>It verifies that the image matches a RSA BER-encoded key</li>
+<li>starts and updates a few SHA buffers</li>
+<li>it encrypts/decrypts something with AES<sub>enc</sub><sub>blk</sub> (!)</li>
+</ul>
+
+<p>
+I learned this half from being somewhat experienced with C and reading the decompiled code, and half from asking an LLM what each specific code snippet I was in doubt about did
+</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>
