@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Posts on ssltta epic website</title>
+    <link>https://ssltta.xyz/posts/</link>
+    <description>Recent content in Posts on ssltta epic website</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Sun, 09 Mar 2025 00:00:00 +0000</lastBuildDate>
+    <atom:link href="https://ssltta.xyz/posts/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>I Tried Breaking Fortigate Firmware Encryption as a Beginner, and won 🔓</title>
+      <link>https://ssltta.xyz/posts/breaking-fortigate/breaking_fortigate_part1/</link>
+      <pubDate>Sun, 09 Mar 2025 00:00:00 +0000</pubDate>
+      <guid>https://ssltta.xyz/posts/breaking-fortigate/breaking_fortigate_part1/</guid>
+      <description>I&#39;ll explain how I broke Fortigate&#39;s firmware encryption to access the router&#39;s binaries, which handle network functions, for reverse engineering. :)ggG</description>
+    </item>
+  </channel>
+</rss>

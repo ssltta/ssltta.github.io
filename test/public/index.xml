@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>ssltta epic website</title>
+    <link>https://ssltta.xyz/</link>
+    <description>Recent content on ssltta epic website</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Sun, 09 Mar 2025 00:00:00 +0000</lastBuildDate>
+    <atom:link href="https://ssltta.xyz/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>I Tried Breaking Fortigate Firmware Encryption as a Beginner, and won 🔓</title>
+      <link>https://ssltta.xyz/posts/breaking-fortigate/breaking_fortigate_part1/</link>
+      <pubDate>Sun, 09 Mar 2025 00:00:00 +0000</pubDate>
+      <guid>https://ssltta.xyz/posts/breaking-fortigate/breaking_fortigate_part1/</guid>
+      <description>I&#39;ll explain how I broke Fortigate&#39;s firmware encryption to access the router&#39;s binaries, which handle network functions, for reverse engineering. :)ggG</description>
+    </item>
+    <item>
+      <title></title>
+      <link>https://ssltta.xyz/about/</link>
+      <pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+      <guid>https://ssltta.xyz/about/</guid>
+      <description>We are a CTF team&#xA;Our team is composed of 4 members:&#xA;Em (email // X) test test test </description>
+    </item>
+  </channel>
+</rss>
