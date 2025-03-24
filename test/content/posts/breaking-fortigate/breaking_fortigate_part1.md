@@ -190,7 +190,7 @@ Plus I found another binary blob that gets parsed by a "rsa_parse_pub_key" funct
 ![img](/posts/breaking-fortigate/images/fortigate_likely_rsa_key.png)
 
 Then *chacha20_docrypt* decrypts the encrypted memory using the SHA values mentioned previously
-#   Getting the RSA key
+#   Getting the RSA key 🔑 
 "likely\_rsa_key" is an RSA key, I assume this since a RSA-related function calls this chunk of memory as input
 
 ```
@@ -236,7 +236,7 @@ xxd -u -p -s -256  rootfs.gz
 ```
 
 
-#  The Interesting Part
+#  The Interesting Part 🤔 
 
 ![img](/posts/breaking-fortigate/images/fortigate_the_interesting_part.png)
     
@@ -331,7 +331,7 @@ And that's it!
 rootfs.dec: gzip compressed data, last modified: Tue Dec 10 18:42:58 2024, from Unix, original size modulo 2^32 119282688
 ```
 
-# Credits
+# Credits 📜 
 
 <a id="org4a49051"></a>
 
