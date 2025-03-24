@@ -20,6 +20,7 @@ I'll explain how I broke Fortigate's firmware encryption to access the router's 
     4.  [Reverse engineering the kernel image](#orgfb16ce4)
         1.  [Breakdown of the function](#org6ca79d6)
     5.  [Writing the rootfs.gz decryption code](#orged81bfe)
+	6.  [Acknowlegments](#orged81bff)
 
 
 
@@ -145,7 +146,7 @@ Okay, not a gzip file, what is it then?
 
 
 
-it doesn't look like anything, this must mean that rootfs.gz is an encrypted file, flatkc must have some encryption functions that grab this rootfs.gz file and then decrypts it, we just need to slap flatkc in ghidra and look for it, right? Is this even possible for someone who hasn't touched a line of assembly since high school?
+it doesn't look like anything, this must mean that rootfs.gz is an encrypted file, flatkc must have some encryption functions that grab this rootfs.gz file and then decrypts it, we just need to slap flatkc in ghidra and look for it.
 
 
 <a id="orgfb16ce4"></a>
@@ -157,39 +158,85 @@ in Ghidra, but it doesn't work, Ghidra cannot load this type of file
 
 ![img](/posts/breaking-fortigate/images/fortigate_ghidra_supported_formats.png)
 
-\`\`file\`\` says that \`\`flatkc\`\` is a \`\`linux kernel boot executable image\`\`, which is not one of the file types listed, fortunately there's this great [tool](https://github.com/marin-m/vmlinux-to-elf) that converts linux boot images into elf, built exactly for this purpose, we can now import it on Ghidra and start looking at it.
+the *file* Unix command says that **flatkc** is a **linux kernel boot executable image**, which is not one of the file types listed, fortunately there's this great [tool](https://github.com/marin-m/vmlinux-to-elf) that converts linux boot images into an [ELF](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format), built exactly for this purpose, we can now import it on Ghidra and start looking at it.
 
-I look for functions related with startup and initramfs unpacking, I find a function called \`\`populate<sub>rootfs</sub>\`\` which has the initrd address on it, which i quickly make a note of, and yes, the image came with symbols, but seemingly only the linux ones and some timer management stuff for some fortigate service we aren't concerned with.
+I look for functions related with startup and initramfs unpacking, I find a function called *populate_rootfs* which has the initrd address on it, which i quickly make a note of, and yes, the image came with symbols, but seemingly only the Linux ones and some timer management stuff for some fortigate service we aren't concerned with.
 
 ![img](/posts/breaking-fortigate/images/fortigate_populate_root_fs.png)
 
-the address of \`\`\_<sub>initramfs</sub><sub>start</sub>\`\` gets mentioned here by a bunch of functions, including an unlabeled one which i labelled myself, proc<sub>crypto</sub><sub>keys</sub> (the function does a lot more than this, but you'll see this later), out of all the functions mentioned, this one seems the most interesting! Let's look at it
-
+the address of *initramfs_start* gets mentioned here by a bunch of functions, including an unlabeled one which I labelled myself, *proc_crypto_keys* (the function does a lot more than this, but you'll see this later), out of all the functions mentioned, this one seems the most interesting! Let's look at it
 
 <a id="org6ca79d6"></a>
 
 # Breakdown of the function 🔍
 
-The decompiled version of the proc<sub>crypto</sub><sub>keys</sub> function is very long, and despite the name that i gave it, it does not just process crypto keys (in retrospective, it is a pretty nonsensical name)
+The decompiled version of the *proc_crypto_keys* function is very long, and despite the name that i gave it, it does not just process crypto keys (in retrospective, it is a nonsensical name)
 
 I wrote a bunch explaining each and every single line of the decompiled code, but that wasn't very good reading so i'll just give you the high level overview of the code except for the interesting part
 
 -   It does a bunch of memory hygiene operations like zeroing buffers and initializing variables
 -   It verifies that the image matches a RSA BER-encoded key
 -   starts and updates a few SHA buffers
--   it encrypts/decrypts something with AES<sub>enc</sub><sub>blk</sub> (hm&#x2026;)
+-   it encrypts/decrypts something with a function named *AES_enc_blk* (hm&#x2026;)
 
 I learned this half from being somewhat experienced with C and reading the decompiled code, and half from asking an LLM what certain confusing code snippets did.
 
-On the beginning on the function there's a hardcoded 'master' key which its multiple derivations get SHA hashed 
-![img](/posts/breaking-fortigate/images/fortigate_sha_masterkey.png)
+On the beginning on the function there's a hardcoded 'master' key which its multiple derivations get hashed by a SHA function
 
-Plus I found another binary blob that gets parsed by a "rsa<sub>parse</sub><sub>pub</sub><sub>key</sub>" function, I labeled it 'likely rsa key' for this reason
+![img](/posts/breaking-fortigate/images/fortigate_sha_masterkey.png)
+This 'masterkey' gets SHA'd and used for decrypting a RSA key used for both image verification and AES key and AES-CTR counter information storage.
+
+Plus I found another binary blob that gets parsed by a "rsa_parse_pub_key" function, I labeled it 'likely rsa key' for this reason
 ![img](/posts/breaking-fortigate/images/fortigate_likely_rsa_key.png)
 
-Then follows a complex part of the code which basically allocates kernel memory, decrypts a chunk of memory with \`\`chacha20<sub>docrypt</sub>\`\` and does integrity verification by SHAing from \`\`\_<sub>initrd</sub><sub>start</sub>\`\`
+Then *chacha20_docrypt* decrypts the encrypted memory using the SHA values mentioned previously
+#   Getting the RSA key
+"likely\_rsa_key" is an RSA key, I assume this since a RSA-related function calls this chunk of memory as input
 
-##  The Interesting Part
+```
+      crypto_chacha20_init(chacha_state, sha_key, sha_iv);
+      crypto_chacha20_docrypt(chacha_state,memory_alloc_pubkey,&hardcoded_rsa_key,0x10e);
+      ber_decoder = rsa_parse_pub_key(rsa_key_struct,memory_alloc_pubkey,0x10e);
+```
+
+before the RSA key gets parsed it gets decrypted with chacha20 using the SHA'd 'masterkey' mentioned before as its key and iv, we have all we need to get the RSA key ourselves now
+
+```
+hardcodedkey = bytes.fromhex(<long string of bytes>)
+
+sha = sha256()
+sha.update(hardcodedkey[5:])
+test = sha.digest()
+sha.update(hardcodedkey[:5])
+key = sha.digest()
+sha = sha256()
+sha.update(hardcodedkey[2:])
+sha.update(hardcodedkey[:2])
+iv = sha.digest()[:16]
+print(f"key and iv sha: {binascii.hexlify(bytes(key)).upper(), binascii.hexlify(bytes(iv)).upper()}")
+```
+
+I couldn't figure it out how the chacha part worked, as i was unable to extract the key using normal libaries, thankfully I find this [blog](https://www.noways.io/blogs/tech/fortigate-firmware-analysis) talking about a previous version, it explains that they use a custom chacha function and they also provide us their [code](https://github.com/noways-io/fortigate-crypto/blob/main/chacha20.c)
+
+```
+rsa_hardcoded = bytes.fromhex(<long string of bytes>)
+
+chacha = ChaCha20.new(key=key, nonce=iv[4:])
+counter = int.from_bytes(iv[:4], "little")
+chacha.seek(counter * 64)
+rsapubkey = chacha.decrypt(rsa_hardcoded)
+print(f"RSAPUBKEY: {binascii.hexlify(bytes(rsapubkey)).upper()}")
+
+```
+
+we then grab the signature (which is the last 256 bytes of rootfs.gz)
+
+```
+xxd -u -p -s -256  rootfs.gz
+```
+
+
+#  The Interesting Part
 
 ![img](/posts/breaking-fortigate/images/fortigate_the_interesting_part.png)
     
@@ -197,56 +244,97 @@ This is the actual decryption routine!
     
 To break it down what this does
     
-'memory_alloc__pubkey', which got free'd and dereferenced earlier in the code so the name doesn't make sense anymore, is set to \`\`\_<sub>initrd</sub><sub>start</sub>\`\`, minus 100 bytes (presumably the signature is appended to the end and it is 100 bytes)
+*memory_alloc__pubkey*, which got free'd and dereferenced earlier in the code so the name doesn't make sense anymore, is set to *initrd_start*, minus 256 bytes (presumably the signature is appended to the end and it is 256 bytes)
     
-a function (likely something to do with aes) is called with \`\`sha<sub>state</sub>\`\` and \`\`sha<sub>iv</sub>\`\` (again, free'd/dereferenced)
-A loop processes a block of local data (from local<sub>88</sub> up to the location of sha<sub>key</sub>) by splitting each byte into its high and low nibbles (4-bit pieces) and XORing them together. This produces a nonzero checksum (bVar6), ensuring that if the computed value would be zero, it’s forced to 1. This value is later used as an increment.
+a function (likely something to do with aes) is called with *sha_state* and *sha_iv* 
+A loop processes a block of local data (from *local_88* up to the location of *sha_key*) by splitting each byte into its high and low nibbles (4-bit pieces) and XORing them together. This produces a nonzero checksum (bVar6), ensuring that if the computed value would be zero, it’s forced to 1. This value is later used as an increment.
     
-then it loops every 16 bytes and it calls aes<sub>enc</sub><sub>blk</sub> and XORs it with \`\`memory<sub>alloc</sub><sub>pubkey</sub>\`\` (if there are fewer than 16 it is processed similarly)
+then it loops every 16 bytes and it calls *aes_enc_blk* and XORs it with *memory_alloc_pubkey* (if there are fewer than 16 it is processed similarly)
     
-Knowing this, we have enough to write a decryption python script to decrypt rootfs.gz!
-
-
+I get the counter values from a memory dump from GDB while running the image, I throw toghether the rest by asking an LLM to rewrite the decompiled code in python and fixing it step by step.
 <a id="orged81bfe"></a>
 
 # Writing the rootfs.gz decryption code 🔏
 
-I input the decompiled code of the decryption code into an LLM and ask it to write it in python:
+
+I input the decompiled code of the decryption code into an LLM and ask it to write it in python, then i cleaned it up a little, and got this:
 
 ```python
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import unpad
-import struct
+class ctr_ctype(ctypes.Union):
+    _pack_ = 1
+    _fields_ = [("counter", ctypes.c_uint8 * 16)]
 
-def aes_enc_block_doubt(sha_state, sha_key, counter):
-    cipher = AES.new(sha_key, AES.MODE_ECB)
-    return cipher.encrypt(counter)
+checksum = ctr_ctype()
+values = [187,
+          46,
+          188,
+          167,
+          148,
+          31,
+          153,
+          254,
+          246,
+          48,
+          45,
+          255,
+          100,
+          153,
+          115,
+          230,
+          ]
+for i in range(ctypes.sizeof(checksum)):
+    checksum.counter[i] = values[i]
 
-def decrypt_initrd(initrd_data, sha_key, iv):
-    memory_alloc_pubkey = bytearray(initrd_data)
-    initrd_size = len(memory_alloc_pubkey) - 0x100  # Adjusting for footer
-    remainder = initrd_size % 16
+count = 0
+for byte in range(ctypes.sizeof(checksum)):
+    count = ( count ^ (checksum.counter[byte] & 0xF) ^ (checksum.counter[byte] >> 4))
+    print(count)
+
+cipher = AES.new(bytes(sig_struct.aes_key), AES.MODE_ECB)
+blk_off = 0
+rootfs_dec = bytes()
+file_in = open("rootfs.gz", "rb")
+rootfs_enc = data[:-256]
+file_out = open("rootfs.out", "wb")
+rootfs_enc = data[:-256]
+
+while blk_off < len(rootfs_enc):
+    keystream = cipher.encrypt(checksum.counter)
+    fd_out.write(
+        bytes(
+            [
+                b ^ k
+                for b, k in zip(
+                        rootfs_enc[blk_off : blk_off + AES.block_size], keystream
+                )
+            ]
+        )
+    )
+    sig_struct.u.ctr.counter += max(ctr_increment, 1)
+    blk_off += AES.block_size
+    pbar.update(AES.block_size)
     
-    # Compute checksum-like variable
-    checksum = 0
-    for byte in iv:
-        checksum ^= (byte >> 4) ^ (byte & 0xF)
-    checksum = checksum or 1
-    
-    counter = bytearray(iv[:16])
-    offset = 0
-    
-    while offset <= initrd_size - 16:
-        keystream = aes_enc_block_doubt(None, sha_key, counter)
-        for i in range(16):
-            memory_alloc_pubkey[offset + i] ^= keystream[i]
-        offset += 16
-        counter = (int.from_bytes(counter, 'big') + checksum).to_bytes(16, 'big')
-    
-    if remainder:
-        keystream = aes_enc_block_doubt(None, sha_key, counter)
-        for i in range(remainder):
-            memory_alloc_pubkey[offset + i] ^= keystream[i]
-    
-    return bytes(memory_alloc_pubkey[:initrd_size])
+    if len(rootfs_enc) % AES.block_size > 0:
+        keystream = cipher.encrypt(sig_struct.u.counter)
+        fd_out.write(
+            bytes([b ^ k for b, k in zip(rootfs_enc[blk_off:], keystream)])
+        )
+        
+
 ```
+
+it uses AES in CTR mode to decrypt the file, but it has a custom counter so i couldn't just use that.
+And that's it! 
+
+```
+~/P/g/g/fgt_7.4.6 $ file rootfs.dec 
+rootfs.dec: gzip compressed data, last modified: Tue Dec 10 18:42:58 2024, from Unix, original size modulo 2^32 119282688
+```
+
+# Credits
+
+<a id="org4a49051"></a>
+
+[noways.io_fortigate_analysis](https://www.noways.io/blogs/tech/fortigate-firmware-analysis)
+
+[randorisec_fortigate_decryption](https://blog.randorisec.fr/fr/fortigate-rootfs-decryption/)
