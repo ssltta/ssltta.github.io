@@ -74,6 +74,7 @@ Mar. 9, 2025
 </ol>
 </li>
 <li><a href="#orged81bfe">Writing the rootfs.gz decryption code</a></li>
+<li><a href="#orged81bff">Acknowlegments</a></li>
 </ol>
 </li>
 </ol>
@@ -168,80 +169,142 @@ boot
 00000090: bf0c a3b5 df4e 5527 7c6d 8522 7a10 6153  .....NU'|m.&quot;z.aS
 ```
 </code></pre>
-<p>it doesn&rsquo;t look like anything, this must mean that rootfs.gz is an encrypted file, flatkc must have some encryption functions that grab this rootfs.gz file and then decrypts it, we just need to slap flatkc in ghidra and look for it, right? Is this even possible for someone who hasn&rsquo;t touched a line of assembly since high school?</p>
+<p>it doesn&rsquo;t look like anything, this must mean that rootfs.gz is an encrypted file, flatkc must have some encryption functions that grab this rootfs.gz file and then decrypts it, we just need to slap flatkc in ghidra and look for it.</p>
 <p><!-- raw HTML omitted --><!-- raw HTML omitted --></p>
 <h1 id="reverse-engineering-the-kernel-image-">Reverse engineering the kernel image 🔧</h1>
 <p>I realize that to figure out how to decrypt the rootfs.gz file, I must first learn how the file is encrypted, so I try to load up the kernel image file for the router (here on after i&rsquo;ll simply call it &lsquo;flatkc&rsquo;, which is the name of the kernel image file)
 in Ghidra, but it doesn&rsquo;t work, Ghidra cannot load this type of file</p>
 <p><img src="/posts/breaking-fortigate/images/fortigate_ghidra_supported_formats.png" alt="img"></p>
-<p>``file`` says that ``flatkc`` is a ``linux kernel boot executable image``, which is not one of the file types listed, fortunately there&rsquo;s this great <a href="https://github.com/marin-m/vmlinux-to-elf">tool</a> that converts linux boot images into elf, built exactly for this purpose, we can now import it on Ghidra and start looking at it.</p>
-<p>I look for functions related with startup and initramfs unpacking, I find a function called ``populate<!-- raw HTML omitted -->rootfs<!-- raw HTML omitted -->`` which has the initrd address on it, which i quickly make a note of, and yes, the image came with symbols, but seemingly only the linux ones and some timer management stuff for some fortigate service we aren&rsquo;t concerned with.</p>
+<p>the <em>file</em> Unix command says that <strong>flatkc</strong> is a <strong>linux kernel boot executable image</strong>, which is not one of the file types listed, fortunately there&rsquo;s this great <a href="https://github.com/marin-m/vmlinux-to-elf">tool</a> that converts linux boot images into an <a href="https://en.wikipedia.org/wiki/Executable_and_Linkable_Format">ELF</a>, built exactly for this purpose, we can now import it on Ghidra and start looking at it.</p>
+<p>I look for functions related with startup and initramfs unpacking, I find a function called <em>populate_rootfs</em> which has the initrd address on it, which i quickly make a note of, and yes, the image came with symbols, but seemingly only the Linux ones and some timer management stuff for some fortigate service we aren&rsquo;t concerned with.</p>
 <p><img src="/posts/breaking-fortigate/images/fortigate_populate_root_fs.png" alt="img"></p>
-<p>the address of ``_<!-- raw HTML omitted -->initramfs<!-- raw HTML omitted --><!-- raw HTML omitted -->start<!-- raw HTML omitted -->`` gets mentioned here by a bunch of functions, including an unlabeled one which i labelled myself, proc<!-- raw HTML omitted -->crypto<!-- raw HTML omitted --><!-- raw HTML omitted -->keys<!-- raw HTML omitted --> (the function does a lot more than this, but you&rsquo;ll see this later), out of all the functions mentioned, this one seems the most interesting! Let&rsquo;s look at it</p>
+<p>the address of <em>initramfs_start</em> gets mentioned here by a bunch of functions, including an unlabeled one which I labelled myself, <em>proc_crypto_keys</em> (the function does a lot more than this, but you&rsquo;ll see this later), out of all the functions mentioned, this one seems the most interesting! Let&rsquo;s look at it</p>
 <p><!-- raw HTML omitted --><!-- raw HTML omitted --></p>
 <h1 id="breakdown-of-the-function-">Breakdown of the function 🔍</h1>
-<p>The decompiled version of the proc<!-- raw HTML omitted -->crypto<!-- raw HTML omitted --><!-- raw HTML omitted -->keys<!-- raw HTML omitted --> function is very long, and despite the name that i gave it, it does not just process crypto keys (in retrospective, it is a pretty nonsensical name)</p>
+<p>The decompiled version of the <em>proc_crypto_keys</em> function is very long, and despite the name that i gave it, it does not just process crypto keys (in retrospective, it is a nonsensical name)</p>
 <p>I wrote a bunch explaining each and every single line of the decompiled code, but that wasn&rsquo;t very good reading so i&rsquo;ll just give you the high level overview of the code except for the interesting part</p>
 <ul>
 <li>It does a bunch of memory hygiene operations like zeroing buffers and initializing variables</li>
 <li>It verifies that the image matches a RSA BER-encoded key</li>
 <li>starts and updates a few SHA buffers</li>
-<li>it encrypts/decrypts something with AES<!-- raw HTML omitted -->enc<!-- raw HTML omitted --><!-- raw HTML omitted -->blk<!-- raw HTML omitted --> (hm…)</li>
+<li>it encrypts/decrypts something with a function named <em>AES_enc_blk</em> (hm…)</li>
 </ul>
 <p>I learned this half from being somewhat experienced with C and reading the decompiled code, and half from asking an LLM what certain confusing code snippets did.</p>
-<p>On the beginning on the function there&rsquo;s a hardcoded &lsquo;master&rsquo; key which its multiple derivations get SHA hashed
-<img src="/posts/breaking-fortigate/images/fortigate_sha_masterkey.png" alt="img"></p>
-<p>Plus I found another binary blob that gets parsed by a &ldquo;rsa<!-- raw HTML omitted -->parse<!-- raw HTML omitted --><!-- raw HTML omitted -->pub<!-- raw HTML omitted --><!-- raw HTML omitted -->key<!-- raw HTML omitted -->&rdquo; function, I labeled it &rsquo;likely rsa key&rsquo; for this reason
+<p>On the beginning on the function there&rsquo;s a hardcoded &lsquo;master&rsquo; key which its multiple derivations get hashed by a SHA function</p>
+<p><img src="/posts/breaking-fortigate/images/fortigate_sha_masterkey.png" alt="img">
+This &lsquo;masterkey&rsquo; gets SHA&rsquo;d and used for decrypting a RSA key used for both image verification and AES key and AES-CTR counter information storage.</p>
+<p>Plus I found another binary blob that gets parsed by a &ldquo;rsa_parse_pub_key&rdquo; function, I labeled it &rsquo;likely rsa key&rsquo; for this reason
 <img src="/posts/breaking-fortigate/images/fortigate_likely_rsa_key.png" alt="img"></p>
-<p>Then follows a complex part of the code which basically allocates kernel memory, decrypts a chunk of memory with ``chacha20<!-- raw HTML omitted -->docrypt<!-- raw HTML omitted -->`` and does integrity verification by SHAing from ``_<!-- raw HTML omitted -->initrd<!-- raw HTML omitted --><!-- raw HTML omitted -->start<!-- raw HTML omitted -->``</p>
-<h2 id="the-interesting-part">The Interesting Part</h2>
+<p>Then <em>chacha20_docrypt</em> decrypts the encrypted memory using the SHA values mentioned previously</p>
+<h1 id="getting-the-rsa-key">Getting the RSA key</h1>
+<p>&ldquo;likely_rsa_key&rdquo; is an RSA key, I assume this since a RSA-related function calls this chunk of memory as input</p>
+<pre tabindex="0"><code>      crypto_chacha20_init(chacha_state, sha_key, sha_iv);
+      crypto_chacha20_docrypt(chacha_state,memory_alloc_pubkey,&amp;hardcoded_rsa_key,0x10e);
+      ber_decoder = rsa_parse_pub_key(rsa_key_struct,memory_alloc_pubkey,0x10e);
+</code></pre><p>before the RSA key gets parsed it gets decrypted with chacha20 using the SHA&rsquo;d &lsquo;masterkey&rsquo; mentioned before as its key and iv, we have all we need to get the RSA key ourselves now</p>
+<pre tabindex="0"><code>hardcodedkey = bytes.fromhex(&lt;long string of bytes&gt;)
+
+sha = sha256()
+sha.update(hardcodedkey[5:])
+test = sha.digest()
+sha.update(hardcodedkey[:5])
+key = sha.digest()
+sha = sha256()
+sha.update(hardcodedkey[2:])
+sha.update(hardcodedkey[:2])
+iv = sha.digest()[:16]
+print(f&#34;key and iv sha: {binascii.hexlify(bytes(key)).upper(), binascii.hexlify(bytes(iv)).upper()}&#34;)
+</code></pre><p>I couldn&rsquo;t figure it out how the chacha part worked, as i was unable to extract the key using normal libaries, thankfully I find this <a href="https://www.noways.io/blogs/tech/fortigate-firmware-analysis">blog</a> talking about a previous version, it explains that they use a custom chacha function and they also provide us their <a href="https://github.com/noways-io/fortigate-crypto/blob/main/chacha20.c">code</a></p>
+<pre tabindex="0"><code>rsa_hardcoded = bytes.fromhex(&lt;long string of bytes&gt;)
+
+chacha = ChaCha20.new(key=key, nonce=iv[4:])
+counter = int.from_bytes(iv[:4], &#34;little&#34;)
+chacha.seek(counter * 64)
+rsapubkey = chacha.decrypt(rsa_hardcoded)
+print(f&#34;RSAPUBKEY: {binascii.hexlify(bytes(rsapubkey)).upper()}&#34;)
+</code></pre><p>we then grab the signature (which is the last 256 bytes of rootfs.gz)</p>
+<pre tabindex="0"><code>xxd -u -p -s -256  rootfs.gz
+</code></pre><h1 id="the-interesting-part">The Interesting Part</h1>
 <p><img src="/posts/breaking-fortigate/images/fortigate_the_interesting_part.png" alt="img"></p>
 <p>This is the actual decryption routine!</p>
 <p>To break it down what this does</p>
-<p>&lsquo;memory_alloc__pubkey&rsquo;, which got free&rsquo;d and dereferenced earlier in the code so the name doesn&rsquo;t make sense anymore, is set to ``_<!-- raw HTML omitted -->initrd<!-- raw HTML omitted --><!-- raw HTML omitted -->start<!-- raw HTML omitted -->``, minus 100 bytes (presumably the signature is appended to the end and it is 100 bytes)</p>
-<p>a function (likely something to do with aes) is called with ``sha<!-- raw HTML omitted -->state<!-- raw HTML omitted -->`` and ``sha<!-- raw HTML omitted -->iv<!-- raw HTML omitted -->`` (again, free&rsquo;d/dereferenced)
-A loop processes a block of local data (from local<!-- raw HTML omitted -->88<!-- raw HTML omitted --> up to the location of sha<!-- raw HTML omitted -->key<!-- raw HTML omitted -->) by splitting each byte into its high and low nibbles (4-bit pieces) and XORing them together. This produces a nonzero checksum (bVar6), ensuring that if the computed value would be zero, it’s forced to 1. This value is later used as an increment.</p>
-<p>then it loops every 16 bytes and it calls aes<!-- raw HTML omitted -->enc<!-- raw HTML omitted --><!-- raw HTML omitted -->blk<!-- raw HTML omitted --> and XORs it with ``memory<!-- raw HTML omitted -->alloc<!-- raw HTML omitted --><!-- raw HTML omitted -->pubkey<!-- raw HTML omitted -->`` (if there are fewer than 16 it is processed similarly)</p>
-<p>Knowing this, we have enough to write a decryption python script to decrypt rootfs.gz!</p>
-<p><!-- raw HTML omitted --><!-- raw HTML omitted --></p>
+<p><em>memory_alloc__pubkey</em>, which got free&rsquo;d and dereferenced earlier in the code so the name doesn&rsquo;t make sense anymore, is set to <em>initrd_start</em>, minus 256 bytes (presumably the signature is appended to the end and it is 256 bytes)</p>
+<p>a function (likely something to do with aes) is called with <em>sha_state</em> and <em>sha_iv</em>
+A loop processes a block of local data (from <em>local_88</em> up to the location of <em>sha_key</em>) by splitting each byte into its high and low nibbles (4-bit pieces) and XORing them together. This produces a nonzero checksum (bVar6), ensuring that if the computed value would be zero, it’s forced to 1. This value is later used as an increment.</p>
+<p>then it loops every 16 bytes and it calls <em>aes_enc_blk</em> and XORs it with <em>memory_alloc_pubkey</em> (if there are fewer than 16 it is processed similarly)</p>
+<p>I get the counter values from a memory dump from GDB while running the image, I throw toghether the rest by asking an LLM to rewrite the decompiled code in python and fixing it step by step.
+<!-- raw HTML omitted --><!-- raw HTML omitted --></p>
 <h1 id="writing-the-rootfsgz-decryption-code-">Writing the rootfs.gz decryption code 🔏</h1>
-<p>I input the decompiled code of the decryption code into an LLM and ask it to write it in python:</p>
-<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-python" data-lang="python"><span style="display:flex;"><span><span style="color:#f92672">from</span> Crypto.Cipher <span style="color:#f92672">import</span> AES
-</span></span><span style="display:flex;"><span><span style="color:#f92672">from</span> Crypto.Util.Padding <span style="color:#f92672">import</span> unpad
-</span></span><span style="display:flex;"><span><span style="color:#f92672">import</span> struct
+<p>I input the decompiled code of the decryption code into an LLM and ask it to write it in python, then i cleaned it up a little, and got this:</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-python" data-lang="python"><span style="display:flex;"><span><span style="color:#66d9ef">class</span> <span style="color:#a6e22e">ctr_ctype</span>(ctypes<span style="color:#f92672">.</span>Union):
+</span></span><span style="display:flex;"><span>    _pack_ <span style="color:#f92672">=</span> <span style="color:#ae81ff">1</span>
+</span></span><span style="display:flex;"><span>    _fields_ <span style="color:#f92672">=</span> [(<span style="color:#e6db74">&#34;counter&#34;</span>, ctypes<span style="color:#f92672">.</span>c_uint8 <span style="color:#f92672">*</span> <span style="color:#ae81ff">16</span>)]
 </span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#66d9ef">def</span> <span style="color:#a6e22e">aes_enc_block_doubt</span>(sha_state, sha_key, counter):
-</span></span><span style="display:flex;"><span>    cipher <span style="color:#f92672">=</span> AES<span style="color:#f92672">.</span>new(sha_key, AES<span style="color:#f92672">.</span>MODE_ECB)
-</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">return</span> cipher<span style="color:#f92672">.</span>encrypt(counter)
+</span></span><span style="display:flex;"><span>checksum <span style="color:#f92672">=</span> ctr_ctype()
+</span></span><span style="display:flex;"><span>values <span style="color:#f92672">=</span> [<span style="color:#ae81ff">187</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">46</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">188</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">167</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">148</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">31</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">153</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">254</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">246</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">48</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">45</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">255</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">100</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">153</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">115</span>,
+</span></span><span style="display:flex;"><span>          <span style="color:#ae81ff">230</span>,
+</span></span><span style="display:flex;"><span>          ]
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">for</span> i <span style="color:#f92672">in</span> range(ctypes<span style="color:#f92672">.</span>sizeof(checksum)):
+</span></span><span style="display:flex;"><span>    checksum<span style="color:#f92672">.</span>counter[i] <span style="color:#f92672">=</span> values[i]
 </span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#66d9ef">def</span> <span style="color:#a6e22e">decrypt_initrd</span>(initrd_data, sha_key, iv):
-</span></span><span style="display:flex;"><span>    memory_alloc_pubkey <span style="color:#f92672">=</span> bytearray(initrd_data)
-</span></span><span style="display:flex;"><span>    initrd_size <span style="color:#f92672">=</span> len(memory_alloc_pubkey) <span style="color:#f92672">-</span> <span style="color:#ae81ff">0x100</span>  <span style="color:#75715e"># Adjusting for footer</span>
-</span></span><span style="display:flex;"><span>    remainder <span style="color:#f92672">=</span> initrd_size <span style="color:#f92672">%</span> <span style="color:#ae81ff">16</span>
+</span></span><span style="display:flex;"><span>count <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">for</span> byte <span style="color:#f92672">in</span> range(ctypes<span style="color:#f92672">.</span>sizeof(checksum)):
+</span></span><span style="display:flex;"><span>    count <span style="color:#f92672">=</span> ( count <span style="color:#f92672">^</span> (checksum<span style="color:#f92672">.</span>counter[byte] <span style="color:#f92672">&amp;</span> <span style="color:#ae81ff">0xF</span>) <span style="color:#f92672">^</span> (checksum<span style="color:#f92672">.</span>counter[byte] <span style="color:#f92672">&gt;&gt;</span> <span style="color:#ae81ff">4</span>))
+</span></span><span style="display:flex;"><span>    print(count)
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>cipher <span style="color:#f92672">=</span> AES<span style="color:#f92672">.</span>new(bytes(sig_struct<span style="color:#f92672">.</span>aes_key), AES<span style="color:#f92672">.</span>MODE_ECB)
+</span></span><span style="display:flex;"><span>blk_off <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>
+</span></span><span style="display:flex;"><span>rootfs_dec <span style="color:#f92672">=</span> bytes()
+</span></span><span style="display:flex;"><span>file_in <span style="color:#f92672">=</span> open(<span style="color:#e6db74">&#34;rootfs.gz&#34;</span>, <span style="color:#e6db74">&#34;rb&#34;</span>)
+</span></span><span style="display:flex;"><span>rootfs_enc <span style="color:#f92672">=</span> data[:<span style="color:#f92672">-</span><span style="color:#ae81ff">256</span>]
+</span></span><span style="display:flex;"><span>file_out <span style="color:#f92672">=</span> open(<span style="color:#e6db74">&#34;rootfs.out&#34;</span>, <span style="color:#e6db74">&#34;wb&#34;</span>)
+</span></span><span style="display:flex;"><span>rootfs_enc <span style="color:#f92672">=</span> data[:<span style="color:#f92672">-</span><span style="color:#ae81ff">256</span>]
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">while</span> blk_off <span style="color:#f92672">&lt;</span> len(rootfs_enc):
+</span></span><span style="display:flex;"><span>    keystream <span style="color:#f92672">=</span> cipher<span style="color:#f92672">.</span>encrypt(checksum<span style="color:#f92672">.</span>counter)
+</span></span><span style="display:flex;"><span>    fd_out<span style="color:#f92672">.</span>write(
+</span></span><span style="display:flex;"><span>        bytes(
+</span></span><span style="display:flex;"><span>            [
+</span></span><span style="display:flex;"><span>                b <span style="color:#f92672">^</span> k
+</span></span><span style="display:flex;"><span>                <span style="color:#66d9ef">for</span> b, k <span style="color:#f92672">in</span> zip(
+</span></span><span style="display:flex;"><span>                        rootfs_enc[blk_off : blk_off <span style="color:#f92672">+</span> AES<span style="color:#f92672">.</span>block_size], keystream
+</span></span><span style="display:flex;"><span>                )
+</span></span><span style="display:flex;"><span>            ]
+</span></span><span style="display:flex;"><span>        )
+</span></span><span style="display:flex;"><span>    )
+</span></span><span style="display:flex;"><span>    sig_struct<span style="color:#f92672">.</span>u<span style="color:#f92672">.</span>ctr<span style="color:#f92672">.</span>counter <span style="color:#f92672">+=</span> max(ctr_increment, <span style="color:#ae81ff">1</span>)
+</span></span><span style="display:flex;"><span>    blk_off <span style="color:#f92672">+=</span> AES<span style="color:#f92672">.</span>block_size
+</span></span><span style="display:flex;"><span>    pbar<span style="color:#f92672">.</span>update(AES<span style="color:#f92672">.</span>block_size)
 </span></span><span style="display:flex;"><span>    
-</span></span><span style="display:flex;"><span>    <span style="color:#75715e"># Compute checksum-like variable</span>
-</span></span><span style="display:flex;"><span>    checksum <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>
-</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">for</span> byte <span style="color:#f92672">in</span> iv:
-</span></span><span style="display:flex;"><span>        checksum <span style="color:#f92672">^=</span> (byte <span style="color:#f92672">&gt;&gt;</span> <span style="color:#ae81ff">4</span>) <span style="color:#f92672">^</span> (byte <span style="color:#f92672">&amp;</span> <span style="color:#ae81ff">0xF</span>)
-</span></span><span style="display:flex;"><span>    checksum <span style="color:#f92672">=</span> checksum <span style="color:#f92672">or</span> <span style="color:#ae81ff">1</span>
-</span></span><span style="display:flex;"><span>    
-</span></span><span style="display:flex;"><span>    counter <span style="color:#f92672">=</span> bytearray(iv[:<span style="color:#ae81ff">16</span>])
-</span></span><span style="display:flex;"><span>    offset <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>
-</span></span><span style="display:flex;"><span>    
-</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">while</span> offset <span style="color:#f92672">&lt;=</span> initrd_size <span style="color:#f92672">-</span> <span style="color:#ae81ff">16</span>:
-</span></span><span style="display:flex;"><span>        keystream <span style="color:#f92672">=</span> aes_enc_block_doubt(<span style="color:#66d9ef">None</span>, sha_key, counter)
-</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">for</span> i <span style="color:#f92672">in</span> range(<span style="color:#ae81ff">16</span>):
-</span></span><span style="display:flex;"><span>            memory_alloc_pubkey[offset <span style="color:#f92672">+</span> i] <span style="color:#f92672">^=</span> keystream[i]
-</span></span><span style="display:flex;"><span>        offset <span style="color:#f92672">+=</span> <span style="color:#ae81ff">16</span>
-</span></span><span style="display:flex;"><span>        counter <span style="color:#f92672">=</span> (int<span style="color:#f92672">.</span>from_bytes(counter, <span style="color:#e6db74">&#39;big&#39;</span>) <span style="color:#f92672">+</span> checksum)<span style="color:#f92672">.</span>to_bytes(<span style="color:#ae81ff">16</span>, <span style="color:#e6db74">&#39;big&#39;</span>)
-</span></span><span style="display:flex;"><span>    
-</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> remainder:
-</span></span><span style="display:flex;"><span>        keystream <span style="color:#f92672">=</span> aes_enc_block_doubt(<span style="color:#66d9ef">None</span>, sha_key, counter)
-</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">for</span> i <span style="color:#f92672">in</span> range(remainder):
-</span></span><span style="display:flex;"><span>            memory_alloc_pubkey[offset <span style="color:#f92672">+</span> i] <span style="color:#f92672">^=</span> keystream[i]
-</span></span><span style="display:flex;"><span>    
-</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">return</span> bytes(memory_alloc_pubkey[:initrd_size])
-</span></span></code></pre></div>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> len(rootfs_enc) <span style="color:#f92672">%</span> AES<span style="color:#f92672">.</span>block_size <span style="color:#f92672">&gt;</span> <span style="color:#ae81ff">0</span>:
+</span></span><span style="display:flex;"><span>        keystream <span style="color:#f92672">=</span> cipher<span style="color:#f92672">.</span>encrypt(sig_struct<span style="color:#f92672">.</span>u<span style="color:#f92672">.</span>counter)
+</span></span><span style="display:flex;"><span>        fd_out<span style="color:#f92672">.</span>write(
+</span></span><span style="display:flex;"><span>            bytes([b <span style="color:#f92672">^</span> k <span style="color:#66d9ef">for</span> b, k <span style="color:#f92672">in</span> zip(rootfs_enc[blk_off:], keystream)])
+</span></span><span style="display:flex;"><span>        )
+</span></span><span style="display:flex;"><span>        
+</span></span></code></pre></div><p>it uses AES in CTR mode to decrypt the file, but it has a custom counter so i couldn&rsquo;t just use that.
+And that&rsquo;s it!</p>
+<pre tabindex="0"><code>~/P/g/g/fgt_7.4.6 $ file rootfs.dec 
+rootfs.dec: gzip compressed data, last modified: Tue Dec 10 18:42:58 2024, from Unix, original size modulo 2^32 119282688
+</code></pre><h1 id="credits">Credits</h1>
+<p><!-- raw HTML omitted --><!-- raw HTML omitted --></p>
+<p><a href="https://www.noways.io/blogs/tech/fortigate-firmware-analysis">noways.io_fortigate_analysis</a></p>
+<p><a href="https://blog.randorisec.fr/fr/fortigate-rootfs-decryption/">randorisec_fortigate_decryption</a></p>
+
 
         
 
